@@ -255,7 +255,6 @@ public:
                         return translate_displacement<uint8_t>(result_displacement);
                     }
                     else {
-                        puts("Allocate: Exact match front");
                         //exact match on the front of the list
                         m_first_allocation_node = current_node->m_next_node;
                         if (m_first_allocation_node != k_bad_displacement) {
