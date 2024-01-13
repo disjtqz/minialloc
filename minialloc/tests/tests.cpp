@@ -6,6 +6,9 @@
 #include <set>
 #include <cassert>
 #include <intrin.h>
+
+#define MINIALLOC_VERIFY    1
+
 #include "../minialloc.hpp"
 
 static const char g_chartable[] = "abcdefghijklmnopqrstuvwxyz";
@@ -111,13 +114,37 @@ static void test_allocator_template() {
     my_allocator.validate_nodepool();
     my_allocator.assert_is_in_initial_state();
 
+    delete[] memory_pool_data;
 
 }
 
+struct allocator_traits64_t {
+    using displacement_type_t = ptrdiff_t;
+    using size_type_t = size_t;
+    static constexpr size_t k_allocation_alignment = 1;
+    static constexpr bool k_use_absolute_pointers = false;
+};
+
+struct allocator_traits64_absolute_t {
+    using displacement_type_t = ptrdiff_t;
+    using size_type_t = size_t;
+    static constexpr size_t k_allocation_alignment = 1;
+    static constexpr bool k_use_absolute_pointers = true;
+
+};
+
+struct allocator_traits32_t {
+    using displacement_type_t = int32_t;
+    using size_type_t = uint32_t;
+    static constexpr uint32_t k_allocation_alignment = 1;
+    static constexpr bool k_use_absolute_pointers = false;
+};
 
 int main() {
-    test_allocator_template<allocator_template_t<ptrdiff_t, size_t>>();
-    test_allocator_template<allocator_template_t<int32_t, uint32_t>>();
-
+    for (uint32_t i = 0; i < 65536; ++i) {
+        test_allocator_template<allocator_template_t<allocator_traits64_t>>();
+        test_allocator_template<allocator_template_t<allocator_traits64_absolute_t>>();
+        test_allocator_template<allocator_template_t<allocator_traits32_t>>();
+    }
     return 0;
 }

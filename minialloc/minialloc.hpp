@@ -1,10 +1,12 @@
 #pragma once
 
-template<typename TDisplacement, typename TSizeType> 
+template<typename Traits> 
 struct allocator_template_t {
 
-    using allocation_displacement_t = TDisplacement;
-    using size_type_t = TSizeType;
+    using allocation_displacement_t = typename Traits::displacement_type_t;
+    using size_type_t = typename Traits::size_type_t;
+
+    static constexpr size_type_t k_imposed_alignment = Traits::k_allocation_alignment;
 
     struct allocation_node_t {
         allocation_displacement_t m_base;
@@ -12,8 +14,11 @@ struct allocator_template_t {
         allocation_displacement_t m_next_node;
         allocation_displacement_t m_previous_node;
     };
+    static_assert(k_imposed_alignment <= sizeof(allocation_node_t));
 
     static constexpr allocation_displacement_t k_bad_displacement = 0;
+    static constexpr bool k_use_absolute_pointers = Traits::k_use_absolute_pointers;
+
     struct allocator_t {
     private:
         //nodes that represent a region of free memory
@@ -29,7 +34,12 @@ struct allocator_template_t {
 
         template<typename T>
         T* translate_displacement(allocation_displacement_t displacement) {
-            return reinterpret_cast<T*>(&m_memory[displacement]);
+            if constexpr (k_use_absolute_pointers) {
+                return reinterpret_cast<T*>(displacement);
+            }
+            else {
+                return reinterpret_cast<T*>(&m_memory[displacement]);
+            }
         }
 
         allocation_node_t* translate_node(allocation_displacement_t displacement) {
@@ -38,7 +48,18 @@ struct allocator_template_t {
 
         template<typename T>
         allocation_displacement_t convert_to_displacement(T* ptr) {
-            return reinterpret_cast<uint8_t*>(ptr) - m_memory;
+            if constexpr (k_use_absolute_pointers) {
+                return reinterpret_cast<allocation_displacement_t>(ptr);
+            }
+            else {
+                return reinterpret_cast<uint8_t*>(ptr) - m_memory;
+            }
+        }
+
+        static size_type_t allocation_align(size_type_t allocation_size) {
+            allocation_size += k_imposed_alignment - 1;
+            allocation_size &= ~(k_imposed_alignment - 1);
+            return allocation_size;
         }
 
     public:
@@ -50,13 +71,15 @@ struct allocator_template_t {
             m_max_allocations(max_allocations),
             m_available_memory(0) {
 
+            assert((reinterpret_cast<uintptr_t>(m_memory) & (k_imposed_alignment - 1)) == 0);
+
             auto sizeof_nodes = static_cast<size_type_t>((sizeof(allocation_node_t) * (max_allocations + 1)));
 
             size_type_t size_after_nodes = total_memory_size - sizeof_nodes;
 
             m_available_memory = size_after_nodes;
 
-            auto nodes = translate_node(sizeof(allocation_node_t)); //skip offset 0, our invalid offset
+            auto nodes = &reinterpret_cast<allocation_node_t*>(m_memory)[1]; //skip offset 0, our invalid offset
 
             nodes[0].m_base = sizeof_nodes;
             nodes[0].m_size = size_after_nodes;
@@ -225,6 +248,7 @@ struct allocator_template_t {
         }
     public:
         void* allocate(size_type_t allocation_size) {
+            allocation_size = allocation_align(allocation_size);
             allocation_node_t* current_node = nullptr;
             for (allocation_displacement_t node_displacement = m_first_allocation_node; node_displacement != k_bad_displacement; node_displacement = current_node->m_next_node) {
                 current_node = translate_node(node_displacement);
@@ -280,6 +304,7 @@ struct allocator_template_t {
 
 
         void deallocate(void* memory, size_type_t allocation_size) {
+            allocation_size = allocation_align(allocation_size);
             validate_freelist();
             auto mem_displacement = convert_to_displacement(memory);
 
@@ -316,11 +341,13 @@ struct allocator_template_t {
         }
 
         void assert_allocation_node_correct(allocation_node_t* node) {
-
+#if MINIALLOC_VERIFY == 1
             auto displacement = convert_to_displacement(node);
 
             assert(displacement >= sizeof(allocation_node_t));
-            assert((displacement % sizeof(allocation_node_t)) == 0);
+            if constexpr (!k_use_absolute_pointers) {
+                assert((displacement % sizeof(allocation_node_t)) == 0);
+            }
             if (node->m_previous_node == k_bad_displacement) {
                 assert(m_first_allocation_node == displacement);
             }
@@ -341,14 +368,18 @@ struct allocator_template_t {
 
             assert(node->m_base + node->m_size <= m_total_memory_size);
 
-            assert(node < translate_node(sizeof(allocation_node_t) * (m_max_allocations + 1)));
+            assert(node < &reinterpret_cast<allocation_node_t*>(m_memory)[m_max_allocations + 1]);
+#endif
         }
 
         void assert_pooled_node_correct(allocation_node_t* node) {
+#if MINIALLOC_VERIFY == 1
             auto displacement = convert_to_displacement(node);
 
             assert(displacement >= sizeof(allocation_node_t));
-            assert((displacement % sizeof(allocation_node_t)) == 0);
+            if constexpr (!k_use_absolute_pointers) {
+                assert((displacement % sizeof(allocation_node_t)) == 0);
+            }
             if (node->m_previous_node == k_bad_displacement) {
                 assert(m_first_pooled_node == displacement);
             }
@@ -365,9 +396,11 @@ struct allocator_template_t {
 
             assert(node->m_base == k_bad_displacement);
             assert(node->m_size == 0);
+#endif
         }
 
         void assert_is_in_initial_state() {
+#if MINIALLOC_VERIFY == 1
             dump_allocation_state();
             size_type_t nodes_in_pool = 0;
 
@@ -393,6 +426,7 @@ struct allocator_template_t {
             size_type_t size_after_nodes = m_total_memory_size - (sizeof(allocation_node_t) * (m_max_allocations + 1));
 
             assert(first_alloc_node->m_size == size_after_nodes);
+#endif
         }
 
         void dump_allocation_state() {
@@ -407,6 +441,7 @@ struct allocator_template_t {
         }
 
         void validate_freelist() {
+#if MINIALLOC_VERIFY == 1
             auto node = m_first_allocation_node;
             size_type_t computed_avail = 0;
             while (node != k_bad_displacement) {
@@ -416,14 +451,17 @@ struct allocator_template_t {
                 node = current_node->m_next_node;
             }
             assert(computed_avail == m_available_memory);
+#endif
         }
 
         void validate_nodepool() {
+#if MINIALLOC_VERIFY == 1
             auto node = m_first_pooled_node;
             while (node != k_bad_displacement) {
                 assert_pooled_node_correct(translate_node(node));
                 node = translate_node(node)->m_next_node;
             }
         }
+#endif
     };
 };
