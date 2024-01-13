@@ -22,6 +22,7 @@ private:
     size_t m_total_memory_size;
 
     size_t m_max_allocations;
+    size_t m_available_memory;
 
     template<typename T>
     T* translate_displacement(allocation_displacement_t displacement) {
@@ -36,12 +37,21 @@ private:
     allocation_displacement_t convert_to_displacement(T* ptr) {
         return reinterpret_cast<uint8_t*>(ptr) - m_memory;
     }
+
 public:
-    allocator_t(uint8_t* mem, size_t total_memory_size, size_t max_allocations) : m_first_allocation_node(k_bad_displacement), m_first_pooled_node(k_bad_displacement), m_memory(mem), m_total_memory_size(total_memory_size), m_max_allocations(max_allocations) {
+    allocator_t(uint8_t* mem, size_t total_memory_size, size_t max_allocations) :
+        m_first_allocation_node(k_bad_displacement), 
+        m_first_pooled_node(k_bad_displacement), 
+        m_memory(mem),
+        m_total_memory_size(total_memory_size), 
+        m_max_allocations(max_allocations),
+        m_available_memory(0){
 
         auto sizeof_nodes = (sizeof(allocation_node_t) * (max_allocations + 1));
 
         size_t size_after_nodes = total_memory_size - sizeof_nodes;
+
+        m_available_memory = size_after_nodes;
 
         auto nodes = translate_node(sizeof(allocation_node_t)); //skip offset 0, our invalid offset
 
@@ -165,10 +175,8 @@ private:
     void insert_allocation_between(allocation_node_t* first, allocation_node_t* second, allocation_displacement_t allocation_base, size_t allocation_size) {
 
         if ((first->m_base + first->m_size) == allocation_base) {
-
             //freeing this allocation causes first and second to form a contiguous region!
             if ((allocation_base + allocation_size) == second->m_base) {
-
                 first->m_size += allocation_size;
                 first->m_size += second->m_size;
 
@@ -186,7 +194,6 @@ private:
                 return;
 
             }
-
             first->m_size += allocation_size;
             assert_allocation_node_correct(first);
             return;
@@ -195,6 +202,7 @@ private:
 
         else if ((allocation_base + allocation_size) == second->m_base) {
             second->m_base = allocation_base;
+            second->m_size += allocation_size;
             assert_allocation_node_correct(second);
             return;
         }
@@ -224,6 +232,7 @@ public:
                     auto result_displacement = current_node->m_base;
                     current_node->m_base += allocation_size;
                     current_node->m_size -= allocation_size;
+                    m_available_memory -= allocation_size;
                     validate_freelist();
                     return translate_displacement<uint8_t>(result_displacement);
 
@@ -232,7 +241,6 @@ public:
                     //exact match!
 
                     if (node_displacement != m_first_allocation_node) {
-                        puts("Allocate: Exact match not front");
                         auto result_displacement = current_node->m_base;
 
                         if (current_node->m_next_node != k_bad_displacement) {
@@ -241,7 +249,9 @@ public:
                         translate_node(current_node->m_previous_node)->m_next_node = current_node->m_next_node;
 
                         release_node_to_pool(current_node);
+                        m_available_memory -= allocation_size;
                         validate_freelist();
+                       
                         return translate_displacement<uint8_t>(result_displacement);
                     }
                     else {
@@ -254,6 +264,7 @@ public:
                         }
                         auto result_displacement = current_node->m_base;
                         release_node_to_pool(current_node);
+                        m_available_memory -= allocation_size;
                         validate_freelist();
                         return translate_displacement<uint8_t>(result_displacement);
                     }
@@ -267,7 +278,7 @@ public:
 
 
     void deallocate(void* memory, size_t allocation_size) {
-
+        validate_freelist();
         auto mem_displacement = convert_to_displacement(memory);
 
         auto previous_node = k_bad_displacement;
@@ -287,17 +298,17 @@ public:
         }
 
         if (previous_node == k_bad_displacement) {
-            puts("Deallocate: Append to front");
             append_allocation_to_front(mem_displacement, allocation_size);
+            m_available_memory += allocation_size;
         }
         else if (current_node == k_bad_displacement) {
-            puts("Deallocate: Append to tail");
 
             insert_allocation_to_tail(translate_node(previous_node), mem_displacement, allocation_size);
+            m_available_memory += allocation_size;
         }
         else {
-            puts("Deallocate: Insert between");
             insert_allocation_between(translate_node(previous_node), translate_node(current_node), mem_displacement, allocation_size);
+            m_available_memory += allocation_size;
         }
         validate_freelist();
     }
@@ -395,11 +406,14 @@ public:
 
     void validate_freelist() {
         auto node = m_first_allocation_node;
-
+        size_t computed_avail = 0;
         while (node != k_bad_displacement) {
-            assert_allocation_node_correct(translate_node(node));
-            node = translate_node(node)->m_next_node;
+            auto current_node = translate_node(node);
+            assert_allocation_node_correct(current_node);
+            computed_avail += current_node->m_size;
+            node = current_node->m_next_node;
         }
+        assert(computed_avail == m_available_memory);
     }
 
     void validate_nodepool() {

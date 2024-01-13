@@ -29,7 +29,7 @@ static std::string create_random_string() {
 
 int main() {
     uint8_t* memory_pool_data = new uint8_t[2 * 1024 * 1024];
-
+    memset(memory_pool_data, 0, 2 * 1024 * 1024);
     allocator_t my_allocator{ memory_pool_data, 2 * 1024 * 1024, 2048 };
 
     my_allocator.assert_is_in_initial_state();
