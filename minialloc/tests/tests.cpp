@@ -27,9 +27,15 @@ static std::string create_random_string() {
 }
 
 
-int main() {
+
+
+template<typename AllocatorTemplate>
+static void test_allocator_template() {
     uint8_t* memory_pool_data = new uint8_t[2 * 1024 * 1024];
     memset(memory_pool_data, 0, 2 * 1024 * 1024);
+
+    using allocator_t = typename AllocatorTemplate::allocator_t;
+
     allocator_t my_allocator{ memory_pool_data, 2 * 1024 * 1024, 2048 };
 
     my_allocator.assert_is_in_initial_state();
@@ -105,7 +111,13 @@ int main() {
     my_allocator.validate_nodepool();
     my_allocator.assert_is_in_initial_state();
 
+
+}
+
+
+int main() {
+    test_allocator_template<allocator_template_t<ptrdiff_t, size_t>>();
+    test_allocator_template<allocator_template_t<int32_t, uint32_t>>();
+
     return 0;
-
-
 }
